@@ -1,0 +1,625 @@
+---
+sidebar_position: 1
+---
+
+# 1장 리팩터링: 첫번째 예시
+
+프로그램이 새로운 기능을 추가하기에 편한 구조가 아니라면, 먼저 기능을 추가하기 쉬운 형태로 리팩터링 하고 나서 원하는 기능을 추가한다.
+
+리팩터링의 첫 단계는 항상 똑같다.  
+리팩터링할 코드 영역을 꼼꼼하게 검사해줄 테스트 코드부터 마련해야한다.  
+리팩터링 기법들이 버그 발생 여지를 최소화하도록 구성됐다고는 하나 실제 작업은 사람이 수행하기 때문에 언제든 실수 할 수 있다.  
+테스트 코드는 내가 저지른 실수로부터 보호해주는 버그 검출기 역할을 한다.  
+원하는 내용을 소스코드와 테스트코드 양쪽에 적어두면, 두 번 다 똑같이 실수하지 않는 한 버그 검출기에 반드시 걸린다.
+
+## statement 함수 리팩터링
+
+아래 함수를 보자. (인자 두개를 받아서 결과값을 출력해주는 함수이다.)
+
+```ts
+function statement(invoice: Invoice, plays: Play) {
+  let totalAmount = 0;
+  let volumeCredits = 0;
+  let result = `청구 내역 (고객명: ${invoice.customer})\n`;
+
+  const format = new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+  }).format;
+
+  for (let perf of invoice.performances) {
+    const play = plays[perf.playID];
+    let thisAmount = 0;
+
+    // highlight-start
+    switch (play.type) {
+      case 'tragedy': // 희극
+        thisAmount = 40000;
+        if (perf.audience > 30) {
+          thisAmount += 1000 * (perf.audience - 30);
+        }
+      case 'comedy': // 희극
+        thisAmount = 30000;
+        if (perf.audience > 20) {
+          thisAmount += 10000 + 500 * (perf.audience - 20);
+        }
+        thisAmount += 300 * perf.audience;
+        break;
+
+      default:
+        throw new Error(`알 수 없는 장르: ${play.type}`);
+    }
+    // highlight-end
+
+    // 포인트 적립
+    volumeCredits += Math.max(perf.audience - 30, 0);
+    // 희극 관객 5명마다 추가 포인트를 제공
+    if ('comedy' === play.type) volumeCredits += Math.floor(perf.audience / 5);
+    // 청구 내역을 출력
+    result += `  ${play.name}: ${format(thisAmount / 100)} (${
+      perf.audience
+    }석)\n`;
+    totalAmount += thisAmount;
+  }
+
+  result += `총액: ${format(totalAmount / 100)}\n`;
+  result += `적립 포인트: ${volumeCredits}점\n`;
+
+  return result;
+}
+```
+
+함수가 매우 길다. 긴 함수를 리팩터링 할 때는 먼저 전체 동작의 각각의 부분으로 나눌 수 있는 지점을 찾는다.  
+중간쯤의 switch 부분이 눈에 띌 것이다.  
+이 switch문에서는 요금을 계산하고 있다. 이 함수를 추출해준다.  
+추출한 함수에는 그 코드가 하는 일을 설명하는 이름을 지어준다. amountFor가 적당하다.
+
+먼저 별도의 함수로 빼냈을 때 새 함수에서는 유효범위를 벗어나는 변수가 있는지 확인한다.
+예시에서는 perf, play, thisAmount가 여기 속한다. 이 때 값이 바뀌지 않는 perf, play는 매개변수로 전달한다.
+
+```ts
+function amountFor(perf: Performance, play: { name: string; type: string }) {
+  // highlight-next-line
+  let thisAmount = 0; // 변수를 초기화
+
+  switch (play.type) {
+    ... // 동일 코드
+  }
+  // highlight-next-line
+  return thisAmount; // 함수 안에서 값이 바뀌는 변수 반환
+}
+```
+
+이제 statement에서는 thisAmount값을 채울 때 방금 추출한 amountFor 함수를 호출하면 된다.
+
+:::caution
+수정하고 나면 곧바로 컴파일하고 테스트해서 실수한게 없는지 확인한다.  
+아무리 간단한 수정이라도 리팩터링 후에는 항상 테스트하는 습관을 들이는 것이 바람직한다.  
+한가지를 수정할 때마다 테스트하면, 오류가 생기더라도 변경 폭이 작다.  
+이처럼 조금씩 변경하고 매번 테스트하는 것은 리팩터링 절차의 핵심이다.
+:::
+
+**리팩터링은 프로그램 수정을 작은 단계로 나눠 진행한다. 따라서 중간에 실수하더라도 버그를 쉽게 찾을 수 있다.**
+
+JS에서는 함수를 nested function으로 만들 수 있기 때문에 이렇게 하면 바깥 함수에서 쓰던 변수를 새로 추출한 함수에 매개변수로 전달할 필요가 없어서 편리하다.
+
+하나의 리팩터링을 문제없이 끝낼 때마다 커밋한다.  
+이렇게 자잘한 변경들이 어느 정도 의미 있는 단위로 뭉쳐지면 공유 저장소로 푸시한다.
+
+다시 돌아와서 아까 추출된 함수를 조금 수정해보자. 우선 변수의 이름을 명확한 이름으로 변경한다.
+
+```ts
+function amountFor(perf: Performance, play: { name: string; type: string }) {
+  // highlight-next-line
+  let result = 0; // 명확한 이름으로 변경
+  ...
+  // highlight-next-line
+  return result;
+}
+```
+
+함수의 반환 값에는 result라는 이름을 쓰면 변수의 역할을 쉽게 알 수 있다.  
+이번에도 마찬가지로 컴파일(또는 트랜스파일), 테스트하고, 커밋한다.
+
+이번에는 함수의 인자 이름을 perf -> aPerformance로 리팩터링한다.
+
+```ts
+function amountFor(aPerformance: Performance, play: { name: string; type: string }) {
+  // highlight-next-line
+  let result = 0; // 명확한 이름으로 변경
+  ...
+  // highlight-next-line
+  return result;
+}
+```
+
+자바스크립트와 같은 동적 타입 언어를 다룰 때 타입이 드러나게 작성하면 도움이된다. 매개변수 이름에 접두어로 타입을 적고, 지금처럼 매개변수의 역할이 뚜렷하지 않을 때는 부정 관사(a/an)을 붙인다.
+
+:::note
+컴퓨터가 이해하는 코드는 바보도 작성할 수 있다. 사람이 이해하도록 작성하는 프로그래머가 실력자이다.
+:::
+
+이제 play 변수를 제거해보자. play는 aPerformance에서 얻기 때문에 애초에 매개변수로 전달할 필요가 없다.
+그냥 amountFor함수 안에서 다시 계산하면 된다. (`임시 변수를 질의 함수로 바꾸기`)
+
+```ts {임시변수를 질의 함수로 바꾸기}
+function playFor(aPerformance) {
+  return plays[aPerformance.playID];
+}
+```
+
+그 후 변수를 `인라인화`한다.
+
+```ts
+let thisAmount = amountFor(perf, playFor(perf));
+```
+
+switch문 내부에서는 아래와 같이 적용하면 예쁘다.
+
+```ts
+switch (playFor(aPerformance).type) {
+  case "tragedy":
+  ...
+}
+```
+
+각 모든 과정에 compile -> test -> commit을 한다. (세뇌)
+
+지금까지 리팩터링한 amountFor함수를 보자.
+
+```ts
+function amountFor(aPerformance: Performance) {
+  let result = 0;
+  // highlight-next-line
+  switch (playFor(aPerformance).type) {
+    case 'tragedy': // 희극
+    ...
+    default:
+      // highlight-next-line
+      throw new Error(`알 수 없는 장르: ${playFor(aPerformance).type}`);
+  }
+
+  return result;
+}
+```
+
+밑줄친 두 줄을 보면 두 줄에서 모두 하나의 함수를 불러오는 것을 볼 수 있다.  
+이 코드가 느려지더라도 제대로 리팩터링된 코드는 그렇지 않은 코드보다 성능을 개선하기 훨씬 수월하다.
+
+이제 volumeCredits을 계산하는 함수를 추출해보자. play변수는 제거했으므로 perf만 넘긴다.
+
+```ts
+function volumeCredits(perf) {
+  let volumeCredits = 0;
+  ... // 계산과정
+  return volumeCredits;
+}
+```
+
+이제 변수들을 정리한다.
+
+```ts
+function volumeCreditsFor(aPerformance) {
+  let result = 0;
+  result += Math.max(aPerformance.audience - 30, 0);
+  ... // 계산과정
+  return result;
+}
+```
+
+다음으로 format함수도 이름과 선언을 바꿔서 usd로 화폐단위를 맞춰는 함수를 정의한다.
+
+```ts
+function usd(aNumber) {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+  }).format(aNumber / 100);
+}
+```
+
+이렇게하면 statement()함수 내부가 깔끔해진다. 리팩터링된 statement()를 보자.
+
+```ts
+function statement(invoice: Invoice, plays: Play) {
+  let totalAmount = 0;
+  let volumeCredits = 0;
+  let result = `청구 내역 (고객명: ${invoice.customer})\n`;
+
+  for (let perf of invoice.performances) {
+    volumeCredits += volumeCreditsFor(perf);
+    let thisAmount = 0;
+    totalAmount += amountFor(perf);
+    volumeCredits += Math.max(perf.audience - 30, 0);
+    result += `  ${playFor(perf).name}: ${usd(amountFor(perf))} (${
+      perf.audience
+    }석)\n`;
+    totalAmount += thisAmount;
+  }
+
+  result += `총액: ${usd(totalAmount)}\n`;
+  result += `적립 포인트: ${volumeCredits}점\n`;
+
+  return result;
+}
+```
+
+다음은 반복문을 쪼개는 작업을 한다. 위에서는 totalAmount와 volumeCredits을 같이 구하고 있다.  
+다음과 같이 반복문을 쪼갠다. 또한 volumeCredits을 선언하는 문장도 아래로 내린다.
+
+```ts
+let volumeCredits = 0;
+for (let perf of invoice.performance) {
+  volumeCredits += volumeCreditsFor(perf);
+}
+```
+
+volumeCredits 값 갱신과 관련된 문장들을 한데 모아두면 임시 변수를 질의 함수로 바꿀 수 있다.  
+volumeCredits값 계산 코드를 함수로 추출한다.
+
+```ts
+function totalVolumeCredits() {
+  let volumeCredits = 0;
+  for (let perf of invoice.performances) {
+    volumeCredits += volumeCreditsFor(perf);
+  }
+  return volumeCredits;
+}
+
+let volumeCredits = totalVolumeCredits();
+```
+
+다음엔 `변수 인라인하기`를 적용해 volumeCredits 변수를 없앤다.
+
+```ts
+result += `적립 포인트: ${totalVolumeCredits()}점\n`;
+```
+
+마지막으로 totalAmount를 계산하는 함수도 위와 같은 방법을 적용해준다.  
+이렇게 리팩터링을 하면 중첩함수가 난무하는 아래와 같은 코드가 나온다.
+
+```ts
+function statement(invoice: Invoice, plays: Play) {
+  let result = `청구 내역 (고객명: ${invoice.customer})\n`;
+  for (let perf of invoice.performances) {
+    result += `  ${playFor(perf).name}: ${usd(amountFor(perf))} (${
+      perf.audience
+    }석)\n`;
+  }
+  result += `총액: ${usd(totalAmount())}\n`;
+  result += `적립 포인트: ${totalVolumeCredits()}점\n`;
+  return result;
+
+  function totalVolumeCredits() {
+    let result = 0;
+    for (let perf of invoice.performances) {
+      result += volumeCreditsFor(perf);
+    }
+    return result;
+  }
+
+  function playFor(aPerformance: Performance) {
+    return plays[aPerformance.playID];
+  }
+
+  function volumeCreditsFor(aPerformance: Performance) {
+    let result = 0;
+    result += Math.max(aPerformance.audience - 30, 0);
+    if ('comedy' === playFor(aPerformance).type)
+      result += Math.floor(aPerformance.audience / 5);
+    return result;
+  }
+
+  function usd(aNumber) {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 2,
+    }).format(aNumber / 100);
+  }
+
+  function amountFor(aPerformance: Performance) {
+    let result = 0;
+
+    switch (playFor(aPerformance).type) {
+      case 'tragedy': // 희극
+        result = 40000;
+        if (aPerformance.audience > 30) {
+          result += 1000 * (aPerformance.audience - 30);
+        }
+      case 'comedy': // 희극
+        result = 30000;
+        if (aPerformance.audience > 20) {
+          result += 10000 + 500 * (aPerformance.audience - 20);
+        }
+        result += 300 * aPerformance.audience;
+        break;
+
+      default:
+        throw new Error(`알 수 없는 장르: ${playFor(aPerformance).type}`);
+    }
+    return result;
+  }
+
+  function totalAmount() {
+    let result = 0;
+    for (let perf of invoice.performances) {
+      result += amountFor(perf);
+    }
+    return result;
+  }
+}
+```
+
+statement() 함수는 출력할 문장을 생성하는 일만 한다. 계산 로직은 모두 여러개의 보조 함수로 빼냈다.  
+결과적으로 각 계산 과정은 전체 흐름을 이해하기가 쉬워졌다.
+
+## statement의 HTML 버전
+
+이제 기능을 변경해보자. statement를 HTML형식으로 출력해야한다.  
+단계를 쪼개서 처리해보자. 첫단계에서는 statement()에 필요한 데이터를 처리하고 다음 단계에서는 앞서 처리한 결과를 텍스트나 HTML로 표현한다.
+
+```ts
+function statement(invoice: Invoice, plays: Play) {
+  const statementData = {};
+  return renderPlainText(statementData, invoice, plays); // 중간 데이터 구조를 인수로 전달
+}
+
+function renderPlainText(data, invoice, plays) {...}
+```
+
+인수를 통해 전달되는 데이터를 중간 데이터 구조로 옮기면, 계산 관련 코드는 전부 statement함수로 모으고 renderPlainText는 data매개변수로 전달된 데이터만 처리하게 할 수 있다.
+
+```ts
+function statement(invoice: Invoice, plays: Play) {
+  const statementData = {};
+  statementData['customer'] = invoice.customer;
+  statementData['performances'] = invoice.performances.map(enrichPerformance);
+  return renderPlainText(statementData, plays);
+
+  function enrichPerformance(aPerformance) {
+    const result = Object.assign({}, aPerformance);
+    return result;
+  }
+}
+```
+
+이렇게 만들고 계산 로직을 옮긴다.(`함수 옮기기`)
+
+```ts
+function enrichPerformance(aPerformance) {
+  const result = Object.assign({}, aPerformance);
+  result.play = playFor(result);
+  return result;
+
+  function playFor(aPerformance) {
+    return plays[aPerformance.playID];
+  }
+}
+```
+
+모든 계산로직을 옮겨준다.
+
+```ts
+function statement(invoice: Invoice, plays: Play) {
+  const statementData = {};
+  statementData['customer'] = invoice.customer;
+  statementData['performances'] = invoice.performances.map(enrichPerformance);
+  statementData['totalAmount'] = totalAmount(statementData);
+  statementData['totalVolumeCredits'] = totalVolumeCredits(statementData);
+  return renderPlainText(statementData, plays);
+}
+```
+
+이제 반복문을 파이프라인으로 바꾼다.
+
+```ts
+function totalAmount(data) {
+  return data.performances.reduce((total, p) => total + p.amount, 0);
+}
+
+function totalVolumeCredits(data) {
+  return data.performances.reduce((total, p) => total + p.volumeCredits, 0);
+}
+```
+
+이제 statement에 필요한 데이터 처리에 해당하는 코드를 모두 함수로 뺀다.
+
+```ts
+funtion createStatementData(invoice, plays) {
+  const statementData = {};
+  statementData['customer'] = invoice.customer;
+  statementData['performances'] = invoice.performances.map(enrichPerformance);
+  statementData['totalAmount'] = totalAmount(statementData);
+  statementData['totalVolumeCredits'] = totalVolumeCredits(statementData);
+  return statementData;
+}
+```
+
+이제 로직을 분리했으니 변수도 입맛에 맞게 바꿔준다.
+
+```ts
+function createStatementData(invoice: Invoice , plays: Play) {
+  const result = {};
+  result['customer'] = invoice.customer;
+  result['performances'] = invoice.performances.map(enrichPerformance);
+  result['totalAmount'] = totalAmount(result);
+  result['totalVolumeCredits'] = totalVolumeCredits(result);
+  return result;
+
+  function enrichPerformance() {...}
+  ...
+}
+```
+
+이제 데이터 생성 로직이 분리되었으니 html을 생성하는 버전의 함수를 만들 수 있다.
+
+```ts
+import createStatementData from './createStatementData';
+
+function htmlStatement(invoice, plays) {
+  return renderHtml(createStatementData(invoice, plays));
+}
+```
+
+이제 데이터를 만드는 부분에 의존하지 않고 html또는 plaintext를 출력할 수 있다.  
+계산하는 부분과 출력하는 부분을 모듈화 하면 각 부분이 하는 일과 그 부분들이 맞물려 돌아가는 과정을 파악하기 쉬워진다.
+
+## 다형성을 활용해 계산 코드 재구성하기
+
+amontFor() 함수를 보면 연극 장르에 따라 계산 방식이 달라진다는 사실을 알 수 있다.  
+이런 형태의 조건부 로직은 코드 수정 횟수가 늘어날수록 골칫거리로 전락하기 쉽다.  
+이를 방지하려면 프로그래밍 언어가 제공하는 구조적인 요소로 적절히 보완해야 한다.  
+객체지향의 핵심 특성인 다형성(polymorphism)을 활용하자. (`조건부 로직을 다형성으로 바꾸기`)
+
+우리가 다루는 코드에서는 enrichPerformance 함수의 amountFor과 volumeCreditsFor를 전용 클래스로 옮겨보자.
+
+```ts
+class PerformanceCalculator {
+  constructor(aPerformance, aPlay) {
+    this.performance = aPerformance;
+    this.play = aPlay;
+  }
+}
+```
+
+amountFor 함수를 클래스안으로 옮겨준다.
+
+```ts
+class PerformanceCalculator {
+  performance: Performance;
+  play: { type: string };
+  constructor(aPerformance: Performance, aPlay: { type: string }) {
+    this.performance = aPerformance;
+    this.play = aPlay;
+  }
+
+  get amount() {
+    let result = 0;
+
+    switch (this.play.type) {
+      case 'tragedy': // 희극
+        result = 40000;
+        if (this.performance.audience > 30) {
+          result += 1000 * (this.performance.audience - 30);
+        }
+      case 'comedy': // 희극
+        result = 30000;
+        if (this.performance.audience > 20) {
+          result += 10000 + 500 * (this.performance.audience - 20);
+        }
+        result += 300 * this.performance.audience;
+        break;
+
+      default:
+        throw new Error(`알 수 없는 장르: ${this.play.type}`);
+    }
+    return result;
+  }
+}
+```
+
+volumeCredits도 같은 방식으로 옮겨준다.
+
+클래스에 로직을 담았으면 이제 다형성을 지원하게 만들자.  
+가장 먼저 할 일은 타입 코드대신 서브 클래스를 사용하도록 변경하는 것이다.  
+이렇게 하려면 PerformanceCalculator의 서브 클래스들을 준비하고 createStatementData에서 그중 적합한 서브 클래스를 사용하게 만들어야한다.
+
+자바스크립트에서는 생성자가 서브 클래스의 인스턴스를 반환할 수 없기 떄문에 생성자를 팩터리 함수로 바꾼다.
+
+```ts
+function createPerformanceCalculator(aPerformance, aPlay) {
+  switch (aPlay.type) {
+    case 'tragedy':
+      return new TragedyCalculator(aPerformance, aPlay);
+    case 'comedy':
+      return new ComedyCalculator(aPerformance, aPlay);
+    default:
+      throw new Error(`알 수 없는 장르: ${aPlay.type}`);
+  }
+}
+```
+
+그 후 각 서브 클래스를 구현한다. 결과는 아래와 같다.
+
+```ts
+class PerformanceCalculator {
+  performance: Performance;
+  play: { type: string };
+  constructor(aPerformance: Performance, aPlay: { type: string }) {
+    this.performance = aPerformance;
+    this.play = aPlay;
+  }
+
+  get amount(): number {
+    throw new Error('서브 클래스에서 처리하도록 설계되었습니다.');
+  }
+
+  get volumeCredits() {
+    return Math.max(this.performance.audience - 30, 0);
+  }
+}
+
+class TragedyCalculator extends PerformanceCalculator {
+  get amount() {
+    let result = 40000;
+    if (this.performance.audience > 30) {
+      result += 1000 * (this.performance.audience - 30);
+    }
+    return result;
+  }
+}
+class ComedyCalculator extends PerformanceCalculator {
+  get amount(): number {
+    let result = 30000;
+    if (this.performance.audience > 20) {
+      result += 10000 + 500 * (this.performance.audience - 20);
+    }
+    result += 300 * this.performance.audience;
+    return result;
+  }
+
+  get volumeCredits() {
+    return super.volumeCredits + Math.floor(this.performance.audience / 5);
+  }
+}
+```
+
+이번 수정으로 나아진 점은 연극 장르별 계산 코드들을 함께 묶어뒀다는 것이다.  
+새로운 장르를 추가하려면 해당 장르의 서브 클래스를 작성하고 생성함수인 createPerformanceCalculator에 추가하면 된다.
+
+## 정리
+
+리팩토링을 크게 3단계로 진행했다.
+
+1. 먼저 원본함수를 중첩함수 여러개로 나눴다.
+2. `단계 쪼개기`를 적용해서 계산코드와 출력코드를 분리했다.
+3. 계산 로직을 다형성으로 표현했다.
+
+**좋은 코드를 가늠하는 확실한 방법은 '얼마나 수정하기 쉬운가'이다.**
+
+코드를 '수정하기 쉬운 정도'야말로 좋은 코드를 가늠하는 확실한 방법이라고 믿는다.  
+코드는 명확해야한다. 코드를 수정해야할 상황이 되면 고쳐야 할 곳을 쉽게 찾을 수 있고 오류 없이 빠르게 수정 가능해야한다.
+
+팀의 현재와 이상의 차이에 항상 신경쓰면서, 이상에 가까워지도록 리팩터링해야한다.
+
+:::tip
+리팩터링을 효과적으로 하는 핵심은, 각 단계를 잘게 나눠야 더 빠르게 처리할 수 있고, 코드는 절대 깨지지 않으며, 이러한 작은 단계들이 모여서 상당히 큰 변화를 이룰 수 있다는 사실을 깨닫는 것이다. 이점을 명심하자.
+
+작은 단계부터의 컴파일 -> 테스트 -> 푸쉬의 의식적인 노력.
+:::
+
+## 느낀점
+
+챕터 1을 읽는데 3시간이상 걸린 것 같다.  
+일단 이 유명한 책의 내 첫 느낌은 문화 충격이다. 이 책을 읽기전에 나는 리팩터링이라는 책 제목에 대해서
+좀 추상적인 내용일 수 있다고 생각했다. 아직 챕터 1밖에 읽지 않았지만 이 책에서는 리팩터링을 매우 체계적으로 접근한다.  
+솔직히 너무 신기했다. `함수 추출하기`, `변수 인라인하기`, `조건부 로직을 다형성으로 바꾸기`등 정말 신기하고 재밌었다.
+분명 나는 하나의 예제를 봤지만 그 코드를 어떻게 씹고 뜯고 맛보고 즐기는 과정을 통해 소화시키는 과정(리팩토링)을 배운 것 같다.  
+즐거웠다.
+
+마지막으로 하나 꼭 기억해야 할 말이 있는 것 같다.
+
+_좋은 코드를 가늠하는 확실한 방법은 `얼마나 수정하기 쉬운가`이다._
