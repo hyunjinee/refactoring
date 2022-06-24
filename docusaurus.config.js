@@ -8,8 +8,8 @@ const darkCodeTheme = require('prism-react-renderer/themes/dracula');
 const config = {
   title: 'Refactoring',
   tagline: '코드 구조를 체계적으로 개선하여 효율적인 리팩터링 구현하기',
-  url: 'https://your-docusaurus-test-site.com',
-  baseUrl: '/',
+  url: ' https://hyunjinee.github.io/',
+  baseUrl: '/refactoring',
   onBrokenLinks: 'throw',
   onBrokenMarkdownLinks: 'warn',
   favicon: 'img/favicon.ico',
