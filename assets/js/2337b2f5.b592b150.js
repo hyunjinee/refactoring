@@ -1,0 +1,1 @@
+"use strict";(self.webpackChunkrefactoring=self.webpackChunkrefactoring||[]).push([[62],{4495:a=>{a.exports=JSON.parse('{"label":"facebook","permalink":"/refactoring/blog/tags/facebook","allTagsPath":"/refactoring/blog/tags","count":1}')}}]);
