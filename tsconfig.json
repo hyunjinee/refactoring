@@ -1,9 +1,12 @@
 {
-  // This file is not used in compilation. It is here just for a nice editor experience.
   "extends": "@tsconfig/docusaurus/tsconfig.json",
   "compilerOptions": {
-    "target": "esnext",
+    "target": "es2015",
+    "module": "commonjs",
+    "sourceMap": true,
+    "declaration": true,
     "baseUrl": ".",
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "types": ["mocha", "node"]
   }
 }
